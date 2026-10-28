@@ -54,7 +54,7 @@ npx wrangler tail                 # logs en vivo del Worker desplegado
 ## Estado (hecho el 2026-10-28)
 
 - Repo público `davedvd-lang/comite-ia`, Pages en `https://davedvd-lang.github.io/comite-ia/`, Worker en `https://comite-ia.comite-ia-worker.workers.dev`.
-- Secretos subidos: `APP_PASSWORD` y `GEMINI_API_KEY` (las claves nuevas de AI Studio empiezan por `AQ.`, son válidas). Mistral va por Workers AI, sin clave.
+- Secretos subidos: `APP_PASSWORD`, `GEMINI_API_KEY` (las claves nuevas de AI Studio empiezan por `AQ.`, son válidas), `GROQ_API_KEY`, `OPENROUTER_API_KEY` y `HF_TOKEN`. Sin `ANTHROPIC_API_KEY` (de pago). Mistral, DeepSeek, Kimi, GLM y Qwen van por Workers AI, sin clave.
 - Si `gemini-flash-latest` está saturado (503), el Worker reintenta con `gemini-flash-lite-latest` y lo avisa en la respuesta.
 
 ## Particularidades de este PC (Windows)
