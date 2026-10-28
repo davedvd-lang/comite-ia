@@ -23,6 +23,9 @@ const KEY_VAR = {
 // Workers AI (modelos de Cloudflare, p. ej. Mistral) no usa clave: va por el binding `AI` de wrangler.toml.
 const CFAI_FALLBACK_MODELS = ['@cf/mistralai/mistral-small-3.1-24b-instruct'];
 
+// Si un modelo de Gemini está saturado (503 / "high demand"), se reintenta con estos, en orden.
+const GEMINI_BACKUP_MODELS = ['gemini-flash-lite-latest'];
+
 const MAX_INPUT_CHARS = 200_000;
 
 export default {
@@ -185,12 +188,18 @@ async function chat(req, env, cors) {
     };
   }
 
-  const res = await fetch(upstreamUrl, {
-    method: 'POST',
-    headers: upstreamHeaders(provider, key),
-    body: JSON.stringify(payload),
-    signal: req.signal,
-  });
+  const tryModels = provider === 'gemini' ? [model, ...GEMINI_BACKUP_MODELS.filter((m) => m !== model)] : [model];
+  let res, usedModel;
+  for (const m of tryModels) {
+    usedModel = m;
+    res = await fetch(upstreamUrl, {
+      method: 'POST',
+      headers: upstreamHeaders(provider, key),
+      body: JSON.stringify({ ...payload, model: m }),
+      signal: req.signal,
+    });
+    if (res.ok || ![503, 524, 529].includes(res.status)) break;
+  }
   if (!res.ok) return upstreamError(res, provider, cors);
 
   const { readable, writable } = new TransformStream();
@@ -200,6 +209,7 @@ async function chat(req, env, cors) {
 
   (async () => {
     try {
+      if (usedModel !== model) await send({ t: `_(${model} estaba saturado; responde ${usedModel})_\n\n` });
       for await (const d of readSSE(res.body)) {
         if (!d) continue;
         if (d === '[DONE]') break;
