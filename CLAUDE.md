@@ -51,6 +51,20 @@ npx wrangler tail                 # logs en vivo del Worker desplegado
 6. Poner la URL del Worker (`https://comite-ia.<subdominio>.workers.dev`) en la constante `DEFAULT_SERVER` de `docs/index.html`, commit y push.
 7. Verificar: `curl -H "Authorization: Bearer <contraseña>" <URL-worker>/api/status` debe listar los proveedores con `true`. Luego abrir la URL de Pages, poner la contraseña en ⚙️ y pulsar "Probar conexión".
 
+## Estado (hecho el 2026-10-28)
+
+- Repo público `davedvd-lang/comite-ia`, Pages en `https://davedvd-lang.github.io/comite-ia/`, Worker en `https://comite-ia.comite-ia-worker.workers.dev`.
+- Secretos subidos: `APP_PASSWORD` y `GEMINI_API_KEY` (las claves nuevas de AI Studio empiezan por `AQ.`, son válidas). Mistral va por Workers AI, sin clave.
+- Si `gemini-flash-latest` está saturado (503), el Worker reintenta con `gemini-flash-lite-latest` y lo avisa en la respuesta.
+
+## Particularidades de este PC (Windows)
+
+- No hay `gh`: la API de GitHub se usa con el token de `git credential fill`.
+- "Acceso controlado a carpetas" de Windows está activo: solo `git.exe` y `node.exe` tienen permiso para escribir en Documentos.
+- PowerShell bloquea `npx.ps1`: en la terminal de David hay que usar `npx.cmd`.
+- `wrangler login` normal falla (el callback a localhost no llega): usar `npx.cmd wrangler login --device`.
+- Con `curl` en Git Bash, mandar el JSON desde archivo (`--data-binary @archivo`); con tildes en línea da "Problems parsing JSON".
+
 ## Pendiente / ideas
 
 - Historial de sesiones (ahora se pierde todo al recargar). Opción natural: Cloudflare KV o D1 desde el mismo Worker.
