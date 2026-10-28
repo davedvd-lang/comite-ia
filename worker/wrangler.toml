@@ -1,0 +1,17 @@
+name = "comite-ia"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Orígenes que pueden llamar al servidor, separados por comas.
+# Añade aquí la URL de GitHub Pages cuando exista (sin barra final), p. ej.:
+# "https://TU-USUARIO.github.io,http://localhost:8000"
+ALLOWED_ORIGINS = "https://davedvd-lang.github.io,http://localhost:8000,http://127.0.0.1:8000"
+
+# Los secretos NO van aquí. Se suben con:
+#   npx wrangler secret put APP_PASSWORD
+#   npx wrangler secret put GEMINI_API_KEY
+#   npx wrangler secret put GROQ_API_KEY
+#   npx wrangler secret put OPENROUTER_API_KEY
+#   npx wrangler secret put HF_TOKEN
+#   npx wrangler secret put ANTHROPIC_API_KEY

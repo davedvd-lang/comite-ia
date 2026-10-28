@@ -1,0 +1,9 @@
+# Secretos: nunca al repo
+.dev.vars
+.env
+*.env
+# Dependencias y cachés
+node_modules/
+.wrangler/
+.DS_Store
+Thumbs.db

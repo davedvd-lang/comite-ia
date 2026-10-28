@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#020617">
+<title>Comité de IA</title>
+<script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  .collapsed { max-height: 18rem; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .thin::-webkit-scrollbar { width: 4px; } .thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  textarea { resize: none; }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-[100dvh] flex flex-col font-sans overflow-hidden">
+
+<!-- Cabecera -->
+<header class="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-3 shrink-0">
+  <div class="flex items-center gap-3 min-w-0">
+    <div class="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-sm shrink-0">🤖</div>
+    <div class="min-w-0">
+      <h1 class="font-semibold text-sm">Comité de Expertos</h1>
+      <p id="subtitle" class="text-xs text-slate-400 truncate"></p>
+    </div>
+  </div>
+  <div class="flex items-center gap-1 shrink-0">
+    <button id="claude-toggle" type="button" class="text-xs font-semibold px-3 py-1.5 rounded-full border transition"></button>
+    <button id="open-settings" type="button" class="p-2 text-slate-400 hover:text-white text-lg" aria-label="Ajustes">⚙️</button>
+  </div>
+</header>
+
+<!-- Conversación -->
+<main id="feed" class="flex-1 overflow-y-auto thin">
+  <div id="feed-inner" class="max-w-2xl mx-auto p-4 space-y-4">
+    <div class="text-center my-6">
+      <span class="bg-slate-900 text-slate-400 text-xs px-3 py-1.5 rounded-full border border-slate-800 inline-block">
+        💡 Escribe una idea. Los agentes la analizan en paralelo, se replican y se sintetiza un plan.
+      </span>
+    </div>
+  </div>
+</main>
+
+<!-- Entrada -->
+<footer class="bg-slate-900 border-t border-slate-800 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0">
+  <form id="idea-form" class="max-w-2xl mx-auto flex gap-2 items-end">
+    <textarea id="idea-input" rows="1" placeholder="Escribe tu idea aquí..."
+      class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-base sm:text-sm focus:outline-none focus:border-indigo-500 text-slate-100 placeholder-slate-500 max-h-40 thin"></textarea>
+    <button id="send-btn" type="submit" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 h-12 rounded-xl font-medium text-sm transition shrink-0">Enviar</button>
+  </form>
+</footer>
+
+<!-- Ajustes -->
+<div id="settings" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden flex items-end sm:items-center justify-center z-50">
+  <div class="bg-slate-900 border border-slate-800 w-full sm:max-w-lg max-h-[92dvh] rounded-t-2xl sm:rounded-2xl flex flex-col shadow-xl">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
+      <h2 class="font-bold text-base">Ajustes</h2>
+      <button id="close-settings" type="button" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded-lg text-sm font-medium">Listo</button>
+    </div>
+    <div id="settings-body" class="overflow-y-auto p-4 space-y-6 thin"></div>
+  </div>
+</div>
+<div id="datalists"></div>
+
+<script>
+/* ================= Configuración ================= */
+const LS_KEY = 'comite_ia_cfg_v2';
+
+// URL del servidor (Cloudflare Worker). Rellénala tras el primer despliegue,
+// p. ej. 'https://comite-ia.TU-SUBDOMINIO.workers.dev'. Así en cada dispositivo
+// solo hay que escribir la contraseña.
+const DEFAULT_SERVER = '';
+
+const PROV = {
+  gemini:     { label: 'Gemini' },
+  groq:       { label: 'Groq' },
+  openrouter: { label: 'OpenRouter' },
+  hf:         { label: 'Hugging Face' },
+  anthropic:  { label: 'Claude' },
+};
+const PROV_ORDER = ['gemini', 'groq', 'openrouter', 'hf', 'anthropic'];
+const AGENT_PROVIDERS = ['gemini', 'groq', 'openrouter', 'hf'];
+
+// Proveedores con clave configurada en el servidor (se rellena con /api/status)
+let available = {};
+let serverState = 'unknown'; // unknown | ok | auth | down | unset
+
+const DEFAULT_CFG = {
+  server: { url: DEFAULT_SERVER, password: '' },
+  agents: [
+    { on: true, name: 'Analista', provider: 'groq', model: 'openai/gpt-oss-120b',
+      role: 'Analista de proyectos. Desglosa la idea: objetivo real, a quién sirve, viabilidad técnica y económica, y qué haría falta para un primer prototipo.' },
+    { on: true, name: 'Crítico', provider: 'hf', model: 'deepseek-ai/DeepSeek-V3.2',
+      role: 'Crítico implacable y analista de riesgos. Busca fallos, supuestos sin demostrar, costes ocultos y los motivos por los que esto fracasaría. No suavices nada.' },
+    { on: true, name: 'Diseñador', provider: 'gemini', model: 'gemini-flash-latest',
+      role: 'Diseñador de producto y UX. Piensa en la experiencia: qué ve y hace la persona en cada paso, flujos, interfaz, fricciones y cómo hacerlo simple.' },
+    { on: true, name: 'Visionario', provider: 'openrouter', model: 'openrouter/free',
+      role: 'Pensador lateral. Propón variantes, giros y ampliaciones que nadie más vaya a proponer, incluidas ideas arriesgadas, y di cuál tiene más potencial y por qué.' },
+    { on: true, name: 'Pragmático', provider: 'gemini', model: 'gemini-flash-latest',
+      role: 'Ingeniero pragmático. Define la versión mínima que se puede construir en un fin de semana: stack, pasos concretos y qué dejar fuera a propósito.' },
+  ],
+  claude: { on: true, model: 'claude-sonnet-5-5' },
+  fallback: { provider: 'gemini', model: 'gemini-flash-latest' },
+  rebuttal: true,
+  maxWords: 250,
+  modelCache: {},
+};
+
+function loadCfg() {
+  const base = structuredClone(DEFAULT_CFG);
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+    if (s) {
+      const c = { ...base, ...s,
+        server: { ...base.server, ...s.server },
+        claude: { ...base.claude, ...s.claude },
+        fallback: { ...base.fallback, ...s.fallback },
+        modelCache: s.modelCache || {} };
+      if (!c.server.url) c.server.url = DEFAULT_SERVER;
+      return c;
+    }
+  } catch {}
+  return base;
+}
+function saveCfg() { try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch {} }
+let cfg = loadCfg();
+
+/* ================= Utilidades ================= */
+const $ = (s) => document.querySelector(s);
+const feed = $('#feed'), feedInner = $('#feed-inner');
+const form = $('#idea-form'), input = $('#idea-input'), sendBtn = $('#send-btn');
+const INPUT = 'w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-base sm:text-sm text-white focus:outline-none focus:border-indigo-500';
+
+const esc = (s) => String(s ?? '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+const clean = (t) => t.replace(/<think>[\s\S]*?(<\/think>|$)/g, '').replace(/^\s+/, '');
+const md = (t) => DOMPurify.sanitize(marked.parse(t));
+const isTouch = matchMedia('(pointer: coarse)').matches;
+
+function sleep(ms, signal) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(res, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); rej(new DOMException('Cancelado', 'AbortError')); }, { once: true });
+  });
+}
+
+let follow = true;
+feed.addEventListener('scroll', () => { follow = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 100; });
+function pageFollow(force) { if (force || follow) feed.scrollTop = feed.scrollHeight; }
+
+/* ================= Servidor ================= */
+const api = (path) => cfg.server.url.replace(/\/+$/, '') + path;
+const authHeaders = () => ({ Authorization: 'Bearer ' + cfg.server.password });
+
+// p = proveedor (para el mensaje) o null si es una llamada al propio servidor
+async function check(res, p) {
+  if (res.ok) return;
+  let msg = `HTTP ${res.status}`, retry = null;
+  try {
+    const t = await res.text();
+    try { const j = JSON.parse(t); msg = j.error || msg; retry = j.retryAfter || null; }
+    catch { if (t) msg = t.slice(0, 200); }
+  } catch {}
+  const ra = parseFloat(res.headers.get('retry-after'));
+  if (!retry && ra) retry = ra;
+  const label = p ? PROV[p].label : 'Servidor';
+  const e = new Error(`${label}: ${msg}`);
+  e.status = res.status;
+  if ([429, 503, 529].includes(res.status)) { e.rate = true; e.retryAfter = retry; }
+  if (res.status === 401 && msg === 'Contraseña incorrecta') e.message = 'Servidor: contraseña incorrecta. Revísala en ajustes.';
+  else if ([401, 403].includes(res.status)) e.message = `${label}: clave rechazada por el proveedor — ${msg}`;
+  throw e;
+}
+
+async function refreshStatus() {
+  if (!cfg.server.url) { serverState = 'unset'; available = {}; updateHeader(); return; }
+  try {
+    const res = await fetch(api('/api/status'), { headers: authHeaders() });
+    if (res.status === 401) { serverState = 'auth'; available = {}; }
+    else { await check(res, null); available = (await res.json()).providers || {}; serverState = 'ok'; }
+  } catch (e) {
+    if (serverState !== 'auth') serverState = 'down';
+    available = {};
+    console.warn(e);
+  }
+  updateHeader();
+  if (!settings.classList.contains('hidden')) renderServerStatus();
+}
+
+async function* readSSE(res) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).replace(/\r$/, '');
+      buf = buf.slice(i + 1);
+      if (line.startsWith('data:')) yield line.slice(5).trim();
+    }
+  }
+  if (buf.startsWith('data:')) yield buf.slice(5).trim();
+}
+
+// Todas las llamadas pasan por el servidor, que responde siempre con el mismo formato.
+async function* streamFor(provider, model, system, user, signal) {
+  const res = await fetch(api('/api/chat'), {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ provider, model, system, user }),
+  });
+  await check(res, provider);
+  for await (const d of readSSE(res)) {
+    let j; try { j = JSON.parse(d); } catch { continue; }
+    if (j.error) throw new Error(`${PROV[provider].label}: ${j.error}`);
+    if (j.t) yield j.t;
+    if (j.done) return;
+  }
+  throw new Error(`${PROV[provider].label}: la conexión se cortó antes de terminar`);
+}
+
+async function listModels(p) {
+  const res = await fetch(api('/api/models?provider=' + encodeURIComponent(p)), { headers: authHeaders() });
+  await check(res, p);
+  return (await res.json()).models || [];
+}
+
+/* ================= Burbujas ================= */
+const STATUS_CLS = { busy: 'text-amber-400 animate-pulse', wait: 'text-sky-400 animate-pulse', done: 'text-slate-500', error: 'text-red-400' };
+const BODY_BASE = 'body text-sm text-slate-200 break-words';
+
+function initials(name) { return name.split(/\s+/).filter((w) => /\p{L}/u.test(w)).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?'; }
+
+function bubble({ name, sub, final = false }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'flex gap-2.5';
+  wrap.innerHTML = `
+    <div class="w-8 h-8 rounded-full ${final ? 'bg-emerald-600' : 'bg-slate-800 border border-slate-700'} flex items-center justify-center text-[11px] font-bold shrink-0">${esc(initials(name))}</div>
+    <div class="min-w-0 flex-1 rounded-2xl rounded-tl-sm px-3.5 py-3 shadow-md border ${final ? 'border-emerald-500/50 bg-emerald-950/30' : 'border-slate-800 bg-slate-900'}">
+      <div class="flex items-center gap-2 mb-1.5 min-w-0">
+        <span class="font-semibold text-xs shrink-0 ${final ? 'text-emerald-300' : 'text-indigo-300'}">${esc(name)}</span>
+        <span class="text-[10px] text-slate-500 truncate">${esc(sub)}</span>
+        <span class="status ml-auto text-[10px] shrink-0"></span>
+      </div>
+      <div class="${BODY_BASE} whitespace-pre-wrap ${final ? '' : 'max-h-64 overflow-y-auto thin'}"></div>
+      <div class="actions hidden mt-2 gap-4 text-xs"></div>
+    </div>`;
+  feedInner.appendChild(wrap);
+  pageFollow();
+  const el = { wrap, final, body: wrap.querySelector('.body'), statusEl: wrap.querySelector('.status'), actions: wrap.querySelector('.actions') };
+  setStatus(el, 'En cola…', 'wait');
+  return el;
+}
+
+function setStatus(el, text, kind) { el.statusEl.className = 'status ml-auto text-[10px] shrink-0 ' + STATUS_CLS[kind]; el.statusEl.textContent = text; }
+
+function addAction(el, label, fn) {
+  el.actions.classList.remove('hidden'); el.actions.classList.add('flex');
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'text-indigo-400 hover:text-indigo-300 font-medium';
+  b.textContent = label; b.onclick = () => fn(b);
+  el.actions.appendChild(b);
+}
+
+function finish(el, text, t0) {
+  el.body.className = BODY_BASE + ' prose prose-invert prose-sm max-w-none';
+  el.body.innerHTML = md(text);
+  setStatus(el, `✓ ${((performance.now() - t0) / 1000).toFixed(0)} s`, 'done');
+  if (el.final) {
+    addAction(el, 'Copiar', async (b) => {
+      try { await navigator.clipboard.writeText(text); b.textContent = 'Copiado ✓'; } catch { b.textContent = 'No se pudo copiar'; }
+      setTimeout(() => (b.textContent = 'Copiar'), 1500);
+    });
+  } else if (el.body.scrollHeight > 320) {
+    el.body.classList.add('collapsed');
+    addAction(el, 'Ver todo', (b) => { const c = el.body.classList.toggle('collapsed'); b.textContent = c ? 'Ver todo' : 'Ver menos'; });
+  }
+}
+
+function showError(el, e, provider) {
+  let msg = e.message;
+  if (e instanceof TypeError) msg = `No se pudo conectar con el servidor (sin red, URL mal puesta o este origen no está en ALLOWED_ORIGINS).`;
+  el.body.className = BODY_BASE + ' whitespace-pre-wrap text-red-300';
+  el.body.textContent = msg;
+  setStatus(el, 'Error', 'error');
+}
+
+function note(text, isError) {
+  const d = document.createElement('div');
+  d.className = 'text-center my-2';
+  d.innerHTML = `<span class="${isError ? 'bg-red-950/50 text-red-400 border-red-900/50' : 'bg-slate-900 text-slate-400 border-slate-800'} border text-xs px-3 py-1 rounded-full inline-block">${esc(text)}</span>`;
+  feedInner.appendChild(d); pageFollow();
+}
+
+function divider(text) {
+  const d = document.createElement('div');
+  d.className = 'flex items-center gap-3 text-[11px] uppercase tracking-wider text-slate-500 pt-2';
+  d.innerHTML = `<div class="h-px flex-1 bg-slate-800"></div>${esc(text)}<div class="h-px flex-1 bg-slate-800"></div>`;
+  feedInner.appendChild(d); pageFollow();
+}
+
+function appendUser(text) {
+  const d = document.createElement('div');
+  d.className = 'flex justify-end';
+  d.innerHTML = `<div class="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%] text-sm shadow-md">
+    <p class="font-semibold text-xs text-indigo-200 mb-1">Tú</p><p class="whitespace-pre-wrap break-words">${esc(text)}</p></div>`;
+  feedInner.appendChild(d); pageFollow(true);
+}
+
+/* ================= Streaming con reintento ================= */
+async function runStream(el, provider, model, system, user, signal) {
+  const t0 = performance.now();
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let raw = '';
+    try {
+      setStatus(el, 'Escribiendo…', 'busy');
+      for await (const chunk of streamFor(provider, model, system, user, signal)) {
+        raw += chunk;
+        const stick = el.body.scrollHeight - el.body.scrollTop - el.body.clientHeight < 40;
+        el.body.textContent = clean(raw);
+        if (stick) el.body.scrollTop = el.body.scrollHeight;
+        pageFollow();
+      }
+      const text = clean(raw).trim();
+      if (!text) throw new Error(`${PROV[provider].label}: respuesta vacía`);
+      finish(el, text, t0);
+      return text;
+    } catch (e) {
+      if (signal.aborted) throw e;
+      if (e.rate && !raw && attempt < 3) {
+        for (let s = Math.min(Math.ceil(e.retryAfter || 20), 60); s > 0; s--) {
+          setStatus(el, `Límite de uso · reintento en ${s} s`, 'wait');
+          await sleep(1000, signal);
+        }
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+/* ================= Prompts ================= */
+const agentSystem = (a) =>
+`Formas parte de un comité de expertos de IA que analiza ideas junto a otros miembros con roles distintos.
+Tu rol: ${a.name}. ${a.role}
+Responde siempre en castellano. Sé concreto y denso: máximo ${cfg.maxWords} palabras, sin introducciones, sin repetir la idea y sin despedidas. Usa Markdown (viñetas, negritas) cuando ayude.`;
+
+const round1User = (idea) => `Idea a analizar:\n"""\n${idea}\n"""`;
+
+const round2User = (idea, me, all) =>
+`Idea:\n"""\n${idea}\n"""
+
+Tu aportación en la ronda 1:
+${me.text}
+
+Aportaciones del resto del comité:
+${all.filter((r) => r !== me).map((r) => `### ${r.agent.name}\n${r.text}`).join('\n\n')}
+
+Ronda de réplica: desde tu rol, di con qué discrepas y por qué, qué se le ha escapado a todos y si cambias algo de tu postura. No repitas lo que ya dijiste. Máximo 150 palabras.`;
+
+const SYNTH_SYSTEM =
+`Eres el sintetizador y arquitecto jefe de un comité de expertos de IA. Recibes una idea y las aportaciones de varios miembros con roles distintos, a veces con una ronda de réplica.
+Tu trabajo es decidir, no resumir: integra lo valioso, descarta lo débil diciendo por qué, resuelve las contradicciones tomando partido y no inventes consensos que no existen.
+Responde en castellano, en Markdown, con esta estructura:
+## Veredicto
+(2-3 frases: ¿merece la pena y en qué forma?)
+## Decisiones clave
+## Riesgos principales y cómo mitigarlos
+## Plan de acción
+(pasos numerados; el primero, hacible esta semana)
+## Preguntas abiertas`;
+
+function synthUser(idea, r1, r2) {
+  let s = `Idea:\n"""\n${idea}\n"""\n\n# Ronda 1 · Aportaciones\n\n` + r1.map((r) => `## ${r.agent.name}\n${r.text}`).join('\n\n');
+  if (r2.length) s += `\n\n# Ronda 2 · Réplicas\n\n` + r2.map((r) => `## ${r.agent.name}\n${r.text}`).join('\n\n');
+  return s;
+}
+
+/* ================= Orquestación ================= */
+let running = false, controller = null;
+
+async function runAgent(agent, user, signal) {
+  const el = bubble({ name: agent.name, sub: `${PROV[agent.provider].label} · ${agent.model}` });
+  try {
+    const text = await runStream(el, agent.provider, agent.model, agentSystem(agent), user, signal);
+    return { agent, text, ok: true };
+  } catch (e) {
+    if (signal.aborted) { setStatus(el, 'Cancelado', 'error'); throw e; }
+    showError(el, e, agent.provider);
+    return { agent, ok: false };
+  }
+}
+
+async function synthesize(idea, r1, r2, signal) {
+  const useClaude = cfg.claude.on;
+  const provider = useClaude ? 'anthropic' : cfg.fallback.provider;
+  const model = useClaude ? cfg.claude.model : cfg.fallback.model;
+  if (!available[provider]) { note(`El servidor no tiene clave de ${PROV[provider].label} para la síntesis.`, true); return; }
+  divider('Síntesis');
+  const el = bubble({ name: useClaude ? 'Claude · Síntesis' : 'Síntesis', sub: `${PROV[provider].label} · ${model}`, final: true });
+  try {
+    await runStream(el, provider, model, SYNTH_SYSTEM, synthUser(idea, r1, r2), signal);
+  } catch (e) {
+    if (signal.aborted) { setStatus(el, 'Cancelado', 'error'); throw e; }
+    showError(el, e, provider);
+    addAction(el, 'Reintentar síntesis', () => { el.wrap.remove(); withRun((sig) => synthesize(idea, r1, r2, sig)); });
+  }
+}
+
+async function orchestrate(idea, signal) {
+  if (serverState !== 'ok') await refreshStatus();
+  if (serverState === 'unset') { note('Falta la URL del servidor. Ponla en ajustes.', true); return; }
+  if (serverState === 'auth') { note('Contraseña incorrecta. Revísala en ajustes.', true); return; }
+  if (serverState === 'down') { note('No conecta con el servidor. Revisa la URL o tu conexión.', true); return; }
+  const active = cfg.agents.filter((a) => a.on);
+  const agents = active.filter((a) => available[a.provider]);
+  const skipped = active.filter((a) => !available[a.provider]);
+  if (skipped.length) note(`El servidor no tiene clave para: ${skipped.map((a) => a.name).join(', ')}`);
+  if (!agents.length) { note('No hay agentes activos con proveedor configurado.', true); return; }
+
+  divider(`Ronda 1 · ${agents.length} agentes`);
+  const r1 = (await Promise.all(agents.map((a) => runAgent(a, round1User(idea), signal)))).filter((r) => r.ok);
+  if (!r1.length) { note('Ningún agente respondió.', true); return; }
+
+  let r2 = [];
+  if (cfg.rebuttal && r1.length > 1) {
+    divider('Ronda 2 · Réplica');
+    r2 = (await Promise.all(r1.map((me) => runAgent(me.agent, round2User(idea, me, r1), signal)))).filter((r) => r.ok);
+  }
+  await synthesize(idea, r1, r2, signal);
+}
+
+async function withRun(fn) {
+  if (running) return;
+  running = true; controller = new AbortController(); updateSendBtn();
+  try { await fn(controller.signal); }
+  catch (e) {
+    if (controller.signal.aborted || e.name === 'AbortError') note('Cancelado.');
+    else note('Error: ' + e.message, true);
+  } finally {
+    running = false; controller = null; updateSendBtn();
+    if (!isTouch) input.focus();
+  }
+}
+
+function updateSendBtn() {
+  sendBtn.textContent = running ? 'Parar' : 'Enviar';
+  sendBtn.className = (running ? 'bg-red-600 hover:bg-red-500' : 'bg-indigo-600 hover:bg-indigo-500') +
+    ' text-white px-5 h-12 rounded-xl font-medium text-sm transition shrink-0';
+}
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (running) { controller.abort(); return; }
+  const idea = input.value.trim();
+  if (!idea) return;
+  appendUser(idea);
+  input.value = ''; autosize();
+  withRun((signal) => orchestrate(idea, signal));
+});
+
+function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; }
+input.addEventListener('input', autosize);
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || (!e.shiftKey && !isTouch))) { e.preventDefault(); form.requestSubmit(); }
+});
+
+/* ================= Cabecera ================= */
+function updateHeader() {
+  const n = cfg.agents.filter((a) => a.on).length;
+  const synth = cfg.claude.on ? 'Claude sintetiza' : `sintetiza ${PROV[cfg.fallback.provider].label}`;
+  const srv = { unset: ' · ⚠ sin servidor', auth: ' · ⚠ contraseña', down: ' · ⚠ sin conexión' }[serverState] || '';
+  $('#subtitle').textContent = `${n} agentes · ${synth}${cfg.rebuttal ? ' · con réplica' : ''}${srv}`;
+  const b = $('#claude-toggle');
+  b.textContent = cfg.claude.on ? 'Claude ON' : 'Claude OFF';
+  b.className = 'text-xs font-semibold px-3 py-1.5 rounded-full border transition ' +
+    (cfg.claude.on ? 'bg-emerald-600/20 border-emerald-500/60 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-400');
+}
+$('#claude-toggle').onclick = () => { cfg.claude.on = !cfg.claude.on; saveCfg(); updateHeader(); };
+
+/* ================= Ajustes ================= */
+const settings = $('#settings'), sBody = $('#settings-body');
+const section = (title, inner) => `<section class="space-y-3"><h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">${title}</h3>${inner}</section>`;
+const provOptions = (list, sel) => list.map((p) => `<option value="${p}" ${p === sel ? 'selected' : ''}>${PROV[p].label}</option>`).join('');
+
+function renderSettings() {
+  const server = `
+    <label class="block"><span class="block text-xs text-slate-300 font-medium mb-1">URL del servidor</span>
+      <input data-cfg="server.url" value="${esc(cfg.server.url)}" placeholder="https://comite-ia.xxx.workers.dev" autocomplete="off" class="${INPUT} font-mono"></label>
+    <label class="block"><span class="block text-xs text-slate-300 font-medium mb-1">Contraseña</span>
+      <input type="password" data-cfg="server.password" value="${esc(cfg.server.password)}" autocomplete="current-password" class="${INPUT}"></label>
+    <div class="flex items-center gap-3">
+      <button type="button" id="test-server" class="bg-slate-800 hover:bg-slate-700 rounded-lg px-3 py-2 text-sm shrink-0">Probar conexión</button>
+      <p id="server-status" class="text-xs text-slate-400"></p>
+    </div>`;
+
+  const synth = `
+    <label class="flex items-center gap-3 text-sm"><input type="checkbox" data-cfg="claude.on" ${cfg.claude.on ? 'checked' : ''} class="w-5 h-5 accent-emerald-500"> Claude sintetiza</label>
+    <input data-cfg="claude.model" value="${esc(cfg.claude.model)}" list="dl-anthropic" placeholder="modelo de Claude" class="${INPUT} font-mono">
+    <p class="text-xs text-slate-500">Si Claude está apagado, sintetiza este:</p>
+    <div class="grid grid-cols-[auto,1fr] gap-2">
+      <select data-cfg="fallback.provider" class="${INPUT}">${provOptions(AGENT_PROVIDERS, cfg.fallback.provider)}</select>
+      <input data-cfg="fallback.model" value="${esc(cfg.fallback.model)}" list="dl-${cfg.fallback.provider}" class="${INPUT} font-mono">
+    </div>`;
+
+  const debate = `
+    <label class="flex items-center gap-3 text-sm"><input type="checkbox" data-cfg="rebuttal" ${cfg.rebuttal ? 'checked' : ''} class="w-5 h-5 accent-indigo-500"> Ronda de réplica (dobla las llamadas)</label>
+    <label class="flex items-center gap-3 text-sm">Máx. palabras por agente
+      <input type="number" min="50" max="1000" step="50" data-cfg="maxWords" value="${cfg.maxWords}" class="${INPUT} !w-24"></label>`;
+
+  const agents = cfg.agents.map((a, i) => `
+    <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3 space-y-2 ${a.on ? '' : 'opacity-50'}">
+      <div class="flex items-center gap-2">
+        <input type="checkbox" data-agent="${i}" data-field="on" ${a.on ? 'checked' : ''} class="w-5 h-5 accent-indigo-500 shrink-0">
+        <input data-agent="${i}" data-field="name" value="${esc(a.name)}" class="${INPUT} font-semibold">
+        <button type="button" data-del="${i}" class="text-slate-500 hover:text-red-400 px-2 text-lg shrink-0" aria-label="Eliminar">🗑</button>
+      </div>
+      <div class="grid grid-cols-[auto,1fr] gap-2">
+        <select data-agent="${i}" data-field="provider" class="${INPUT}">${provOptions(AGENT_PROVIDERS, a.provider)}</select>
+        <input data-agent="${i}" data-field="model" value="${esc(a.model)}" list="dl-${a.provider}" placeholder="modelo" class="${INPUT} font-mono">
+      </div>
+      <textarea data-agent="${i}" data-field="role" rows="3" placeholder="Qué hace este agente" class="${INPUT}">${esc(a.role)}</textarea>
+    </div>`).join('');
+
+  sBody.innerHTML =
+    section('Servidor', server + `<p class="text-xs text-slate-500">Las claves de API viven en el servidor. Aquí solo se guarda la contraseña, en este navegador.</p>`) +
+    section('Síntesis', synth) +
+    section('Debate', debate) +
+    section('Agentes', agents + `<button type="button" id="add-agent" class="w-full border border-dashed border-slate-700 rounded-xl py-2.5 text-sm text-slate-300 hover:border-indigo-500">+ Añadir agente</button>`) +
+    section('Modelos', `<button type="button" id="load-models" class="w-full bg-slate-800 hover:bg-slate-700 rounded-xl py-2.5 text-sm">Cargar listas de modelos disponibles</button>
+      <p id="models-status" class="text-xs text-slate-500">Rellena las sugerencias de los campos de modelo con lo que ofrece cada proveedor ahora mismo.</p>`) +
+    section('Restablecer', `<button type="button" id="reset" class="text-xs text-red-400">Restaurar agentes y opciones por defecto (conserva las claves)</button>`);
+}
+
+function renderServerStatus() {
+  const el = $('#server-status');
+  if (!el) return;
+  const txt = {
+    unknown: 'Sin comprobar',
+    unset: 'Falta la URL',
+    auth: '✗ Contraseña incorrecta',
+    down: '✗ No conecta',
+    ok: '✓ Conectado · ' + PROV_ORDER.map((p) => `${PROV[p].label} ${available[p] ? '✓' : '✗'}`).join(' · '),
+  }[serverState];
+  el.textContent = txt;
+  el.className = 'text-xs ' + (serverState === 'ok' ? 'text-emerald-400' : serverState === 'unknown' ? 'text-slate-400' : 'text-red-400');
+}
+
+function renderDatalists() {
+  $('#datalists').innerHTML = PROV_ORDER.map((p) =>
+    `<datalist id="dl-${p}">${(cfg.modelCache[p] || []).map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>`).join('');
+}
+
+function setPath(path, val) { const ks = path.split('.'); let o = cfg; while (ks.length > 1) o = o[ks.shift()]; o[ks[0]] = val; }
+
+sBody.addEventListener('input', (e) => {
+  const t = e.target;
+  const val = t.type === 'checkbox' ? t.checked : t.type === 'number' ? parseInt(t.value) || DEFAULT_CFG.maxWords : t.value;
+  if (t.dataset.cfg?.startsWith('server.')) {
+    setPath(t.dataset.cfg, t.value.trim());
+    serverState = 'unknown'; renderServerStatus();
+  } else if (t.dataset.agent != null) {
+    cfg.agents[+t.dataset.agent][t.dataset.field] = val;
+    if (['on', 'provider'].includes(t.dataset.field)) renderSettings();
+  } else if (t.dataset.cfg) {
+    setPath(t.dataset.cfg, val);
+    if (t.dataset.cfg === 'fallback.provider') renderSettings();
+  }
+  saveCfg(); updateHeader();
+});
+
+sBody.addEventListener('click', async (e) => {
+  const t = e.target.closest('button');
+  if (!t) return;
+  if (t.dataset.del != null) {
+    if (confirm(`¿Eliminar el agente "${cfg.agents[+t.dataset.del].name}"?`)) { cfg.agents.splice(+t.dataset.del, 1); saveCfg(); renderSettings(); updateHeader(); }
+  } else if (t.id === 'add-agent') {
+    cfg.agents.push({ on: true, name: 'Nuevo agente', provider: 'gemini', model: 'gemini-flash-latest', role: '' });
+    saveCfg(); renderSettings(); updateHeader();
+    sBody.scrollTop = sBody.scrollHeight;
+  } else if (t.id === 'test-server') {
+    $('#server-status').textContent = 'Comprobando…';
+    await refreshStatus(); renderServerStatus();
+  } else if (t.id === 'load-models') {
+    const st = $('#models-status'); st.textContent = 'Cargando…';
+    if (serverState !== 'ok') await refreshStatus();
+    const out = [];
+    await Promise.all(PROV_ORDER.map(async (p) => {
+      if (!available[p]) { out.push(`${PROV[p].label}: sin clave`); return; }
+      try { const ids = await listModels(p); cfg.modelCache[p] = ids.sort(); out.push(`${PROV[p].label}: ${ids.length}`); }
+      catch (err) { out.push(`${PROV[p].label}: error`); console.warn(err); }
+    }));
+    saveCfg(); renderDatalists();
+    st.textContent = out.join(' · ');
+  } else if (t.id === 'reset') {
+    if (confirm('¿Restaurar agentes y opciones por defecto?')) {
+      const server = cfg.server, cache = cfg.modelCache;
+      cfg = { ...structuredClone(DEFAULT_CFG), server, modelCache: cache };
+      saveCfg(); renderSettings(); updateHeader();
+    }
+  }
+});
+
+function openSettings() { renderSettings(); renderServerStatus(); settings.classList.remove('hidden'); }
+function closeSettings() { settings.classList.add('hidden'); updateHeader(); if (serverState === 'unknown') refreshStatus(); }
+$('#open-settings').onclick = openSettings;
+$('#close-settings').onclick = closeSettings;
+settings.addEventListener('click', (e) => { if (e.target === settings) closeSettings(); });
+
+/* ================= Inicio ================= */
+updateHeader(); updateSendBtn(); renderDatalists();
+if (!cfg.server.url || !cfg.server.password) openSettings();
+else refreshStatus();
+</script>
+</body>
+</html>
