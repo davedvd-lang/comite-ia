@@ -77,10 +77,11 @@ const PROV = {
   groq:       { label: 'Groq' },
   openrouter: { label: 'OpenRouter' },
   hf:         { label: 'Hugging Face' },
+  cfai:       { label: 'Workers AI' },
   anthropic:  { label: 'Claude' },
 };
-const PROV_ORDER = ['gemini', 'groq', 'openrouter', 'hf', 'anthropic'];
-const AGENT_PROVIDERS = ['gemini', 'groq', 'openrouter', 'hf'];
+const PROV_ORDER = ['gemini', 'groq', 'openrouter', 'hf', 'cfai', 'anthropic'];
+const AGENT_PROVIDERS = ['gemini', 'groq', 'openrouter', 'hf', 'cfai'];
 
 // Proveedores con clave configurada en el servidor (se rellena con /api/status)
 let available = {};
@@ -97,7 +98,7 @@ const DEFAULT_CFG = {
       role: 'Diseñador de producto y UX. Piensa en la experiencia: qué ve y hace la persona en cada paso, flujos, interfaz, fricciones y cómo hacerlo simple.' },
     { on: true, name: 'Visionario', provider: 'openrouter', model: 'openrouter/free',
       role: 'Pensador lateral. Propón variantes, giros y ampliaciones que nadie más vaya a proponer, incluidas ideas arriesgadas, y di cuál tiene más potencial y por qué.' },
-    { on: true, name: 'Pragmático', provider: 'gemini', model: 'gemini-flash-latest',
+    { on: true, name: 'Pragmático', provider: 'cfai', model: '@cf/mistralai/mistral-small-3.1-24b-instruct',
       role: 'Ingeniero pragmático. Define la versión mínima que se puede construir en un fin de semana: stack, pasos concretos y qué dejar fuera a propósito.' },
   ],
   claude: { on: true, model: 'claude-sonnet-5-5' },

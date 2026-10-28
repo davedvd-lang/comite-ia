@@ -20,6 +20,9 @@ const KEY_VAR = {
   anthropic: 'ANTHROPIC_API_KEY',
 };
 
+// Workers AI (modelos de Cloudflare, p. ej. Mistral) no usa clave: va por el binding `AI` de wrangler.toml.
+const CFAI_FALLBACK_MODELS = ['@cf/mistralai/mistral-small-3.1-24b-instruct'];
+
 const MAX_INPUT_CHARS = 200_000;
 
 export default {
@@ -34,6 +37,7 @@ export default {
     try {
       if (url.pathname === '/api/status' && req.method === 'GET') {
         const providers = Object.fromEntries(Object.entries(KEY_VAR).map(([p, v]) => [p, Boolean(env[v])]));
+        providers.cfai = Boolean(env.AI);
         return json({ providers }, 200, cors);
       }
       if (url.pathname === '/api/models' && req.method === 'GET') {
@@ -156,6 +160,7 @@ async function chat(req, env, cors) {
   if (typeof model !== 'string' || !model) throw httpError('Falta el modelo', 400);
   if (typeof user !== 'string' || !user) throw httpError('Falta el mensaje', 400);
   if (system.length + user.length > MAX_INPUT_CHARS) throw httpError('Entrada demasiado larga', 413);
+  if (provider === 'cfai') return chatWorkersAI(env, model, system, user, maxTokens, cors);
   const key = keyFor(provider, env);
 
   let upstreamUrl, payload;
@@ -222,7 +227,63 @@ async function chat(req, env, cors) {
   });
 }
 
+async function chatWorkersAI(env, model, system, user, maxTokens, cors) {
+  if (!env.AI) throw httpError('Falta el binding AI en wrangler.toml', 400);
+  let stream;
+  try {
+    stream = await env.AI.run(model, {
+      stream: true,
+      max_tokens: Math.min(Number(maxTokens) || 4096, 8192),
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: user },
+      ],
+    });
+  } catch (e) {
+    const message = e.message || String(e);
+    // 3036 = cupo diario gratuito agotado
+    const status = /3036|daily free allocation|rate limit/i.test(message) ? 429 : 502;
+    return json({ error: message, provider: 'cfai', retryAfter: null }, status, cors);
+  }
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const enc = new TextEncoder();
+  const send = (o) => writer.write(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
+
+  (async () => {
+    try {
+      for await (const d of readSSE(stream)) {
+        if (!d) continue;
+        if (d === '[DONE]') break;
+        let j;
+        try { j = JSON.parse(d); } catch { continue; }
+        // Según el modelo llega como {response} o en formato OpenAI {choices[0].delta.content}
+        const t = j.response ?? j.choices?.[0]?.delta?.content;
+        if (t) await send({ t });
+      }
+      await send({ done: true });
+    } catch (e) {
+      try { await send({ error: e.message || String(e) }); } catch {}
+    } finally {
+      try { await writer.close(); } catch {}
+    }
+  })();
+
+  return new Response(readable, {
+    headers: { ...cors, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' },
+  });
+}
+
 async function listModels(provider, env) {
+  if (provider === 'cfai') {
+    try {
+      const models = await env.AI.models({ task: 'Text Generation', per_page: 100 });
+      const ids = models.map((m) => m.name).filter(Boolean);
+      if (ids.length) return ids.sort();
+    } catch {}
+    return CFAI_FALLBACK_MODELS;
+  }
   const key = keyFor(provider, env);
   const headers = upstreamHeaders(provider, key);
   const url = provider === 'anthropic' ? 'https://api.anthropic.com/v1/models?limit=100' : `${OAI_BASE[provider]}/models`;

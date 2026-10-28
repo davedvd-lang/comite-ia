@@ -15,7 +15,7 @@ worker/wrangler.toml   Config del Worker. ALLOWED_ORIGINS = orígenes permitidos
 - El navegador **nunca** ve las claves de API. Solo manda `Authorization: Bearer <APP_PASSWORD>` al Worker.
 - Endpoints del Worker: `GET /api/status` (qué proveedores tienen clave), `GET /api/models?provider=x`, `POST /api/chat` con `{provider, model, system, user}`.
 - `/api/chat` responde SSE normalizado: `data: {"t":"..."}`, `data: {"error":"..."}`, `data: {"done":true}`. Errores antes del stream: JSON `{error, retryAfter}` con el status del proveedor (429, 401...).
-- Proveedores: `gemini`, `groq`, `openrouter`, `hf` usan la API compatible con OpenAI (Gemini vía `/v1beta/openai`). `anthropic` usa la API nativa de Messages.
+- Proveedores: `gemini`, `groq`, `openrouter`, `hf` usan la API compatible con OpenAI (Gemini vía `/v1beta/openai`). `anthropic` usa la API nativa de Messages. `cfai` es Workers AI de Cloudflare (p. ej. Mistral `@cf/mistralai/mistral-small-3.1-24b-instruct`): no lleva clave, va por el binding `AI` de `wrangler.toml` y tiene un cupo diario gratuito.
 - La configuración del usuario (agentes, roles, modelos, URL del servidor y contraseña) vive en `localStorage` del navegador (`comite_ia_cfg_v2`).
 
 ## Reglas
